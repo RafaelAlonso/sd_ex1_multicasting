@@ -1,3 +1,8 @@
+# =======================================================================
+# Guilherme Nishioka - RA 620246
+# Rafael P. Alonso   - RA 620084
+# =======================================================================
+
 import os
 import socket
 import string
@@ -40,19 +45,26 @@ class Node:
     if (message.type == 'message'):
       print '\nnode' + str(self.id) + ' recebeu mensagem ' + message.id
 
+      # print the current acks received before the actual messages, if any
       if self.acks:
         print '\nacks armazenados do node:'
         for ack in self.acks:
           print "- " + ack.id + ' / ' + str(ack.node_id)
 
-      # set the ack to true and append it to the queue
+      # set the ack to true and
       message.acks[self.id] = True
+
+      # if any acks where received before this message, set them to true
       for ack in self.acks:
         if ack.id == message.id:
           print 'Ack vindo de ' + ack.node_id + ' encontrado!'
           message.acks[ack.node_id] = True
           self.acks.remove(ack)
 
+      # set the clock
+      self.message_clock = max(self.message_clock, self.queue[-1].clock)
+
+      # append the message to the queue
       self.queue.append(message)
 
       # order the queue based on the message clock
@@ -67,8 +79,6 @@ class Node:
       # create an 'ack' message to send to all the other nodes
       ack = Message(self.id, message.id, 'ack')
 
-      self.message_clock = max(self.message_clock, self.queue[-1].clock)
-
       # send the ack to all destinations
       thread.start_new_thread(thread_acks, (ack, self.destinations))
 
@@ -76,11 +86,13 @@ class Node:
       # if the node received a message with the type 'ack'...
       print '\nnode' + str(self.id) + ' recebeu ack da mensagem ' + message.id + ', vindo do node' + str(message.node_id)
 
-      # get the message related to 'be acked' from the queue
+
       if not filter(lambda msg: msg.id == message.id, self.queue):
+        # if the message is not in the queue, just store it for later
         print '\nnode' + str(self.id) + ' nao recebeu a mensagem ' + message.id + ', entao esta guardando o ack.\n'
         self.acks.append(message)
       else:
+        # get the message related to 'be acked' from the queue
         acked_message = filter(lambda msg: msg.id == message.id, self.queue)[0]
 
         # set the ack of the node that sent this message to True
@@ -97,7 +109,7 @@ class Node:
           # remove the message from the queue
           self.queue.remove(acked_message)
 
-          # check if it was really done
+          # print the current queue
           if self.queue:
             print '\nfila do node'
             for message in self.queue:
@@ -107,7 +119,7 @@ class Node:
   def send_message(self):
     self.message_clock += 1
 
-    # create a new message with a unique id
+    # create a new message with an unique id
     message = Message(self.id, 'm' + str(self.id) + str(self.message_clock), 'message', clock=self.message_clock)
     print "\nnode" + str(self.id) + " mandando mensagem " + message.id + ' com clock ' + str(message.clock)
 
@@ -116,6 +128,7 @@ class Node:
 
     # Send the message to all destinations
     for destination in self.destinations:
+      # try to send the message 3 times
       tries = 0
 
       while True:
@@ -186,8 +199,11 @@ def thread_processo():
     except Exception as e:
       print 'Erro ao enviar message: ', e
 
+# Defining the 'sending acks' thread
 def thread_acks(message, destinations):
+  # send the ack message to all the given destinations
   for destination in destinations:
+    # try to send the message 3 times
     tries = 0
 
     while True:
