@@ -8,11 +8,15 @@ import signal
 import time
 from random import randrange
 
+def get_clock(elem):
+  return elem.clock
+
 class Message:
-  def __init__(self, node_id, message_id, type):
+  def __init__(self, node_id, message_id, type, **args):
     self.id = message_id # the one that will identify every message
     self.node_id = node_id # the id of the sender
     self.type = type # can be 'message' or 'ack'
+    self.clock = args.get('clock', None)
 
     # to keep track of the acks received...
     if (type == 'message'):
@@ -24,7 +28,7 @@ class Message:
 class Node:
   def __init__(self, id):
     self.id = int(id) # node id
-    self.message_id = 1
+    self.message_clock = int(id)
     self.queue = [] # where the messages will be stored
     self.acks = [] # where acks received before the message will be stored
 
@@ -34,72 +38,47 @@ class Node:
   def update_queue(self, message):
     # if the node received a message with the type 'message'...
     if (message.type == 'message'):
-      print 'node' + str(self.id) + ' recebeu mensagem ' + message.id
+      print '\nnode' + str(self.id) + ' recebeu mensagem ' + message.id
 
-      print 'acks armazenados do node:'
-      for ack in self.acks:
-        print "- " + ack.id + ' / ' + str(ack.node_id)
+      if self.acks:
+        print '\nacks armazenados do node:'
+        for ack in self.acks:
+          print "- " + ack.id + ' / ' + str(ack.node_id)
 
       # set the ack to true and append it to the queue
       message.acks[self.id] = True
       for ack in self.acks:
         if ack.id == message.id:
+          print 'Ack vindo de ' + ack.node_id + ' encontrado!'
           message.acks[ack.node_id] = True
           self.acks.remove(ack)
 
       self.queue.append(message)
 
+      # order the queue based on the message clock
+      self.queue.sort(key=get_clock)
 
       # print the queue
-      print 'fila do node:'
-      for message in self.queue:
-        print "- " + message.id
-
-      print 'acks armazenados do node:'
-      for ack in self.acks:
-        print "- " + ack.id + ' / ' + str(ack.node_id)
+      if self.queue:
+        print '\nfila do node:'
+        for msg in self.queue:
+          print "- " + msg.id + ' ' + str(msg.acks.values()) + ', clock: ' + str(msg.clock)
 
       # create an 'ack' message to send to all the other nodes
       ack = Message(self.id, message.id, 'ack')
 
-      # send the message to all destinations
-      for destination in self.destinations:
-        tries = 0
+      self.message_clock = max(self.message_clock, self.queue[-1].clock)
 
-        while True:
-          try:
-            # open the socket
-            print 'Mandando ack de ' + str(message.id) + ' para ' + str(destination)
-            meu_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server_address = ('localhost', 25000 + destination)
-            meu_socket.connect(server_address)
+      # send the ack to all destinations
+      thread.start_new_thread(thread_acks, (ack, self.destinations))
 
-            # send the ack
-            pacote_codificado = pickle.dumps(ack)
-            meu_socket.send(pacote_codificado)
-            meu_socket.close()
-
-            print 'Ack enviado'
-          except Exception as e:
-            meu_socket.close()
-            tries += 1
-            if tries < 0:
-              print 'Erro tentando enviar o ack... tentando novamente!'
-              continue
-            else:
-              print 'Nao deu certo...'
-
-          break
     else:
       # if the node received a message with the type 'ack'...
-      print 'node' + str(self.id) + ' recebeu ack da mensagem ' + message.id + ', vindo do node' + str(message.node_id)
-      print 'fila do node:'
-      for msg in self.queue:
-        print "- " + msg.id
+      print '\nnode' + str(self.id) + ' recebeu ack da mensagem ' + message.id + ', vindo do node' + str(message.node_id)
 
       # get the message related to 'be acked' from the queue
       if not filter(lambda msg: msg.id == message.id, self.queue):
-        print 'node' + str(self.id) + ' nao recebeu a mensagem ' + message.id + ', entao esta guardando o ack.'
+        print '\nnode' + str(self.id) + ' nao recebeu a mensagem ' + message.id + ', entao esta guardando o ack.\n'
         self.acks.append(message)
       else:
         acked_message = filter(lambda msg: msg.id == message.id, self.queue)[0]
@@ -119,26 +98,21 @@ class Node:
           self.queue.remove(acked_message)
 
           # check if it was really done
-          print 'fila do node'
-          for message in self.queue:
-            print "- " + message.id
+          if self.queue:
+            print '\nfila do node'
+            for message in self.queue:
+              print "- " + message.id + ' ' + str(message.acks.values()) + ', clock: ' + str(message.clock)
 
   # create a message and send it to everyone
   def send_message(self):
-    # create a new message with a unique id
-    message = Message(self.id, 'm' + str(self.id) + str(self.message_id), 'message')
-    print "node" + str(self.id) + " mandando mensagem " + message.id
+    self.message_clock += 1
 
-    # increment the message_id (to create new unique message ids later)
-    self.message_id += 1
+    # create a new message with a unique id
+    message = Message(self.id, 'm' + str(self.id) + str(self.message_clock), 'message', clock=self.message_clock)
+    print "\nnode" + str(self.id) + " mandando mensagem " + message.id + ' com clock ' + str(message.clock)
 
     # append the created message to the queue
     self.queue.append(message)
-
-    # check if it was really done
-    print 'fila do node:'
-    for message in self.queue:
-      print "- " + message.id
 
     # Send the message to all destinations
     for destination in self.destinations:
@@ -158,15 +132,17 @@ class Node:
           meu_socket.send(pacote_codificado)
           meu_socket.close()
 
-          print 'Mensagem enviada'
+          print 'Mensagem enviada\n'
         except Exception as e:
           meu_socket.close()
           tries += 1
-          if tries < 0:
-            print 'Erro tentando enviar... Tentando novamente!'
+          if tries < 3:
+            print 'Erro tentando enviar o ack: ', e
+            print 'Tentando novamente!'
             continue
           else:
-            print 'Nao deu certo...'
+            print 'Erro tentando enviar o ack: ', e
+            print 'Nao deu certo...\n'
 
         break
 
@@ -198,17 +174,47 @@ def thread_recebe():
   except Exception as e:
     print 'Erro ao abrir o socket:', e
 
-# Definindo a thread que envia pacotes
+# Defining the 'sending messages' thread
 def thread_processo():
   while True:
     try:
       # There's a 20% chance the node will send a message
       # (randrange(10) returns a number from 0 to 9)
-      time.sleep(10)
+      time.sleep(4)
       if (randrange(10) < 2):
           node.send_message()
     except Exception as e:
       print 'Erro ao enviar message: ', e
+
+def thread_acks(message, destinations):
+  for destination in destinations:
+    tries = 0
+
+    while True:
+      try:
+        # open the socket
+        print '\nMandando ack de ' + str(message.id) + ' para ' + str(destination)
+        meu_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_address = ('localhost', 25000 + destination)
+        meu_socket.connect(server_address)
+
+        # send the ack
+        pacote_codificado = pickle.dumps(message)
+        meu_socket.send(pacote_codificado)
+        meu_socket.close()
+
+        print 'Ack enviado'
+      except Exception as e:
+        tries += 1
+        if tries < 3:
+          print 'Erro tentando enviar o ack: ', e
+          print 'Tentando novamente!'
+          continue
+        else:
+          print 'Erro tentando enviar o ack: ', e
+          print 'Nao deu certo...\n'
+
+      break
 
 # =======================================================================
 
